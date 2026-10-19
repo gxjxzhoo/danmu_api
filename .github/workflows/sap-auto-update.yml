@@ -20,7 +20,6 @@ env:
   CF_SPACE: dev
   APP_NAME: danmuapi
   APP_URL: https://danmuapi.cert.cfapps.ap21.hana.ondemand.com
-  IMAGE: logvar/danmu-api
   UPSTREAM: huangxd-/danmu_api
 
 jobs:
@@ -40,15 +39,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main | jq -r '.message // .'
 
-      - name: 查询上游版本
+      - name: 拉取源码（已同步上游的 fork）
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: 读取版本
         id: upstream
         run: |
-          V=$(curl -fsSL "https://raw.githubusercontent.com/$UPSTREAM/main/danmu_api/configs/globals.js" | grep -m1 "VERSION:" | sed -E "s/.*VERSION: '([^']+)'.*/\1/")
+          V=$(grep -m1 "VERSION:" danmu_api/configs/globals.js | sed -E "s/.*VERSION: '([^']+)'.*/\1/")
+          U=$(curl -fsSL "https://raw.githubusercontent.com/$UPSTREAM/main/danmu_api/configs/globals.js" | grep -m1 "VERSION:" | sed -E "s/.*VERSION: '([^']+)'.*/\1/" || true)
           [ -n "$V" ] || { echo "取不到版本号"; exit 1; }
-          if ! curl -fsS "https://hub.docker.com/v2/repositories/$IMAGE/tags/$V" >/dev/null; then
-            echo "Docker Hub 还没有 $IMAGE:$V，下次再试"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "tag=$V" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"; echo "上游版本: $V"
+          echo "fork 源码版本: $V  上游版本: ${U:-未知}"
+          echo "tag=$V" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: 安装 cf CLI 并登录
         if: steps.upstream.outputs.ready == 'true'
@@ -64,9 +67,10 @@ jobs:
         if: steps.upstream.outputs.ready == 'true'
         run: |
           GUID=$(cf app "$APP_NAME" --guid)
-          CUR=$(cf curl "/v3/apps/$GUID/droplets/current" | jq -r '.image // ""')
-          echo "当前镜像: $CUR"; echo "image=$CUR" >> "$GITHUB_OUTPUT"
-          if [ "$CUR" = "$IMAGE:${{ steps.upstream.outputs.tag }}" ] && [ "${{ inputs.force }}" != "true" ]; then
+          echo "guid=$GUID" >> "$GITHUB_OUTPUT"
+          CUR=$(cf curl "/v3/apps/$GUID" | jq -r '.metadata.labels["danmu-version"] // ""')
+          echo "当前已部署版本: ${CUR:-未记录}"; echo "image=${CUR:-未记录}" >> "$GITHUB_OUTPUT"
+          if [ "$CUR" = "${{ steps.upstream.outputs.tag }}" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "已是最新"; echo "need=false" >> "$GITHUB_OUTPUT"
           else
             echo "need=true" >> "$GITHUB_OUTPUT"
@@ -77,9 +81,10 @@ jobs:
         if: steps.current.outputs.need == 'true'
         run: |
           set -o pipefail
-          if ! cf push "$APP_NAME" --docker-image "$IMAGE:${{ steps.upstream.outputs.tag }}" --strategy rolling 2>&1 | tee push.log; then
+          printf '.git\n.github\n' > .cfignore
+          if ! cf push "$APP_NAME" -p . --strategy rolling 2>&1 | tee push.log; then
             tail -25 push.log | sed 's/^/::error::/'
-            cf logs "$APP_NAME" --recent 2>&1 | grep -iE "err|fail|crash|exit" | tail -15 | sed 's/^/::error::LOG /'
+            cf logs "$APP_NAME" --recent 2>&1 | grep -v "\[RTR" | grep -iE "err|fail|crash|exit" | tail -15 | sed 's/^/::error::LOG /'
             exit 1
           fi
           code=000
@@ -89,6 +94,7 @@ jobs:
           done
           cf app "$APP_NAME"
           [ "$code" = "200" ] || { echo "::error::更新后访问异常: $code"; exit 1; }
+          cf curl -X PATCH "/v3/apps/${{ steps.current.outputs.guid }}" -d '{"metadata":{"labels":{"danmu-version":"${{ steps.upstream.outputs.tag }}"}}}' >/dev/null
 
       - name: Telegram 通知
         if: always() && steps.current.outputs.need == 'true'
@@ -97,7 +103,7 @@ jobs:
           if [ "${{ steps.push.outcome }}" = "success" ]; then
             MSG="✅ SAP danmuapi 已更新
           版本: ${{ steps.upstream.outputs.tag }}
-          原镜像: ${{ steps.current.outputs.image }}"
+          原版本: ${{ steps.current.outputs.image }}"
           else
             MSG="❌ SAP danmuapi 更新失败
           目标版本: ${{ steps.upstream.outputs.tag }}，请查看 Actions 日志"
