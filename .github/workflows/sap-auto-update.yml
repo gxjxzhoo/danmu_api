@@ -40,7 +40,7 @@ jobs:
         run: gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main | jq -r '.message // .'
 
       - name: 拉取源码（已同步上游的 fork）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
 
@@ -82,8 +82,8 @@ jobs:
         run: |
           set -o pipefail
           printf '.git\n.github\n' > .cfignore
-          if ! cf push "$APP_NAME" -p . --strategy rolling 2>&1 | tee push.log; then
-            tail -25 push.log | sed 's/^/::error::/'
+          if ! cf push "$APP_NAME" -p . --strategy rolling 2>&1 | tee /tmp/push.log; then
+            tail -25 /tmp/push.log | sed 's/^/::error::/'
             cf logs "$APP_NAME" --recent 2>&1 | grep -v "\[RTR" | grep -iE "err|fail|crash|exit" | tail -15 | sed 's/^/::error::LOG /'
             exit 1
           fi
