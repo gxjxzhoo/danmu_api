@@ -76,7 +76,12 @@ jobs:
         id: push
         if: steps.current.outputs.need == 'true'
         run: |
-          cf push "$APP_NAME" --docker-image "$IMAGE:${{ steps.upstream.outputs.tag }}" --strategy rolling
+          set -o pipefail
+          if ! cf push "$APP_NAME" --docker-image "$IMAGE:${{ steps.upstream.outputs.tag }}" --strategy rolling 2>&1 | tee push.log; then
+            tail -25 push.log | sed 's/^/::error::/'
+            cf logs "$APP_NAME" --recent 2>&1 | grep -iE "err|fail|crash|exit" | tail -15 | sed 's/^/::error::LOG /'
+            exit 1
+          fi
           code=000
           for i in 1 2 3 4 5 6; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 30 "$APP_URL" || true)
