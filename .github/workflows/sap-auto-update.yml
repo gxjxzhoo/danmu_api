@@ -16,10 +16,8 @@ concurrency:
 
 env:
   CF_API: https://api.cf.ap21.hana.ondemand.com
-  CF_ORG: 1366518btrial
   CF_SPACE: dev
   APP_NAME: danmuapi
-  APP_URL: https://danmuapi.cert.cfapps.ap21.hana.ondemand.com
   UPSTREAM: huangxd-/danmu_api
 
 jobs:
@@ -60,7 +58,12 @@ jobs:
           curl -fsSL "https://packages.cloudfoundry.org/stable?release=linux64-binary&version=v8&source=github" | sudo tar -zx -C /usr/local/bin cf8 cf
           cf api "$CF_API"
           CF_USERNAME="$SAP_EMAIL" CF_PASSWORD="$SAP_PASSWORD" cf auth
-          cf target -o "$CF_ORG" -s "$CF_SPACE"
+          ORG=$(cf curl /v3/organizations | jq -r '.resources[0].name')
+          echo "::add-mask::$ORG"
+          cf target -o "$ORG" -s "$CF_SPACE" >/dev/null && echo "已选择 space $CF_SPACE"
+          HOST=$(cf curl "/v3/apps/$(cf app "$APP_NAME" --guid)/routes" | jq -r '.resources[0].url')
+          echo "::add-mask::$HOST"
+          echo "APP_URL=https://$HOST" >> "$GITHUB_ENV"
 
       - name: 对比当前部署版本
         id: current
