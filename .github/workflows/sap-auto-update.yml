@@ -37,9 +37,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main | jq -r '.message // .'
 
-      - name: 拉取源码（已同步上游的 fork）
+      # 直接部署上游源码：上游改动工作流文件时 fork 同步会被拒（GITHUB_TOKEN 无 workflows 权限），不能因此卡住更新
+      - name: 拉取上游源码
         uses: actions/checkout@v5
         with:
+          repository: ${{ env.UPSTREAM }}
           ref: main
 
       - name: 读取版本
@@ -48,7 +50,7 @@ jobs:
           V=$(grep -m1 "VERSION:" danmu_api/configs/globals.js | sed -E "s/.*VERSION: '([^']+)'.*/\1/")
           U=$(curl -fsSL "https://raw.githubusercontent.com/$UPSTREAM/main/danmu_api/configs/globals.js" | grep -m1 "VERSION:" | sed -E "s/.*VERSION: '([^']+)'.*/\1/" || true)
           [ -n "$V" ] || { echo "取不到版本号"; exit 1; }
-          echo "fork 源码版本: $V  上游版本: ${U:-未知}"
+          echo "部署源码版本: $V  上游版本: ${U:-未知}"
           echo "tag=$V" >> "$GITHUB_OUTPUT"; echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: 安装 cf CLI 并登录
